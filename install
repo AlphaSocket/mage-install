@@ -1,0 +1,266 @@
+#!/bin/bash
+#
+# Dumb script that install magento using n98-magerun setting vars in an env file
+# 
+#
+
+#set -x
+
+###
+###
+###
+### FUNCTIONS
+###
+###
+###
+
+echo_stage(){
+    echo -ne $"\n### $1 ###\n"
+}
+
+echo_error(){
+    echo -ne $"\n--- $1 ---\n"
+}
+
+mysql_run_qry(){
+    ### Create DB ###
+    $(which mysql) -h $db_host --user $db_user --password=$db_pass -e "$1" 2>> /tmp/mage_install_errors
+    ### Checking creation DB###
+    STATUS=$? 
+    if [ $STATUS -eq 0 ]; then 
+        echo "- Query '"$1"' executed without errors"
+    elif (grep -i "^ERROR 1007" /tmp/mage_install_errors > /dev/null); then
+        echo_error "Database \"$db_name\" already exists"
+        exit 1;
+    else
+        ### Error Exiting ###
+        echo_error $(cat /tmp/mage_install_errors)
+        exit 1;
+    fi
+    rm -r /tmp/mage_install_errors
+}
+
+download_and_extract(){
+    echo_stage "DOWNLOAD AND EXTRACTING using n98-magerun"
+    
+    $n98magerun install --only-download \
+    --installationFolder="$installation_folder" \
+    --magentoVersionByName="$magento_version_by_name" 
+    
+    ### Exiting if download and extraction goes wrong
+    if [ ! $? -eq 0 ]; then exit 1; fi
+}
+
+create_db(){
+    echo_stage "Creating DB for magento"
+    ### Create DB ###
+    mysql_run_qry "DROP DATABASE IF EXISTS \`$db_name\`;"
+    mysql_run_qry "CREATE DATABASE \`$db_name\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+    #$n98magerun db:query --root-dir="$installation_folder" "CREATE SCHEMA `magento.geoip` DEFAULT CHARACTER SET utf8 ;"
+}
+
+install_magento(){
+    echo_stage "Running installation command using install.php"
+    
+    $php \
+    -ddisplay_startup_errors=1 \
+    -ddisplay_errors=1 \
+    -derror_reporting=-1 \
+    -f $installation_folder/install.php \
+    -- \
+    --license_agreement_accepted $license_agreement_accepted \
+    --locale $locale \
+    --timezone $timezone \
+    --db_host $db_host \
+    --db_name $db_name \
+    --db_user $db_user \
+    --db_pass $db_pass \
+    --db_prefix "$db_prefix" \
+    --url $url \
+    --use_rewrites $use_rewrites \
+    --use_secure $use_secure \
+    --secure_base_url "$secure_base_url" \
+    --use_secure_admin $use_secure_admin \
+    --admin_username $admin_username \
+    --admin_lastname $admin_lastname \
+    --admin_firstname $admin_firstname \
+    --admin_email $admin_email \
+    --admin_password 'password.123' \
+    --session_save $session_save \
+    --admin_frontname $admin_frontname \
+    --backend_frontname $backend_frontname \
+    --default_currency $default_currency \
+    --skip_url_validation $skip_url_validation 
+    ### Exiting if something goes wrong
+    if [ ! $? -eq 0 ]; then exit 1; fi
+
+    ### Setting password
+    $n98magerun admin:user:change-password -n --root-dir $installation_folder $admin_username $admin_password 
+}
+
+
+initialize_composer(){
+    echo_stage "INIT COMPOSER"
+    ### Build a simple composer.json ###
+    $composer init -n --working-dir=$installation_folder
+    
+    ### Init composer ###
+    $n98magerun \
+    composer:init \
+    --no-interaction \
+    --root-dir=$installation_folder \
+    --name=$project_name \
+    --type=project \
+    --description="$project_description" \
+    --author="$admin_firstname $admin_lastname <$admin_email>" 
+    
+    ### Exiting if init goes wrong
+    if [ ! $? -eq 0 ]; then exit 1; fi
+}
+
+flush_cache_(){
+    echo_stage "FLUSHING CACHE"
+    ### Flush 
+    $n98magerun cache:flush --root-dir="$installation_folder"
+    ### Exiting if init goes wrong
+    if [ ! $? -eq 0 ]; then exit 1; fi
+}
+
+disable_cache_(){
+    echo_stage "DISABLING CACHE"
+    ### Disabling
+    $n98magerun cache:disable --root-dir="$installation_folder"
+    ### Exiting if init goes wrong
+    if [ ! $? -eq 0 ]; then exit 1; fi
+}
+
+activate_developer_mode(){
+    echo_stage "ACTIVATING DEVELOPER MODE"
+    ### Replacing 
+    pre="#ini_set('display_errors', 1);"
+    post="ini_set('display_errors', 1);"
+    sed -i -e "s/$pre/$post/g" $installation_folder/index.php
+    ### Exiting if init goes wrong
+    if [ ! $? -eq 0 ]; then exit 1; fi
+}
+
+enable_log(){
+    echo_stage "RUN QUERY FOR ENABLE 'System > Configuration > Developer > Log Settings > Enabled = Yes'"
+    ### RUN QUERY FOR ENABLE "System > Configuration > Developer > Log Settings > Enabled = Yes" ###
+    mysql_run_qry 'UPDATE `'$db_name'`.`core_config_data` SET `value`="1" WHERE `path`="system/log/enable_log";'
+    
+    ### Exiting if init goes wrong
+    if [ ! $? -eq 0 ]; then exit 1; fi
+}
+
+set_owner(){    
+    echo_stage "SETTING OWNER"
+    
+    ### Setting the default owner ( web user ) ###
+    if [ -z "$file_owner" ]; then
+        file_owner='www-data:www-data'
+    fi
+    chown -R $file_owner $installation_folder
+    ### Exiting if checking goes wrong
+    if [ ! $? -eq 0 ]; then echo "Error during set of owner"; fi
+}
+    
+set_privileges(){
+    echo_stage "SETTING RECOMMENDED PRIVILEGES"
+    find $installation_folder -type f -exec chmod 400 {} \;
+    find $installation_folder -type d -exec chmod 500 {} \; 
+    find $installation_folder/var/ -type f -exec chmod 600 {} \; 
+    find $installation_folder/media/ -type f -exec chmod 600 {} \;
+    find $installation_folder/var/ -type d -exec chmod 700 {} \; 
+    find $installation_folder/media/ -type d -exec chmod 700 {} \;
+    chmod 700 $installation_folder/includes
+    chmod 600 $installation_folder/includes/config.php
+}
+
+reindex_all(){
+    echo_stage "REINDEXING with n98-magerun"
+    $n98magerun index:reindex:all --root-dir="$installation_folder"
+    ### Exiting if reindexing goes wrong
+    if [ ! $? -eq 0 ]; then exit 1; fi
+}
+
+###
+###
+### MAIN
+###
+###
+
+#set -o xtrace
+
+### Set default parameters
+envfile=$1
+envDefaultFileName="mage_install_env"
+
+### Check if root is running the script
+if [ "$(whoami)" == 'root' ]; then
+	echo $"You shouldn't install magento as root"
+fi
+
+### ENV importing ###
+### if env file is not passed as argument
+if [ -z "$1" ]; then
+    ### Check existence of env file in current working directory
+    if [ -f $envDefaultFileName ]; then
+        ### Importing local env file ###
+        source $envDefaultFileName;
+    else
+        echo $"Env file not found"
+        exit 1;
+    fi
+else
+    ### Importing env file in argument ###
+    source $1
+fi
+
+### Download and extracting using n98-magerun.phar
+download_and_extract
+### Exiting if something goes wrong
+if [ ! $? -eq 0 ]; then exit 1; fi
+    
+### Creating new DB ###
+create_db
+### Exiting if something goes wrong
+if [ ! $? -eq 0 ]; then exit 1; fi
+
+### Installing magento using install.php
+install_magento
+### Exiting if something goes wrong
+if [ ! $? -eq 0 ]; then exit 1; fi
+
+### Initialize composer with n98-magerun
+if [ $init_composer == 'yes' ]; then
+    initialize_composer
+fi
+
+### Flush and disable cache ###
+if [ $disable_cache == 'yes' ]; then
+    flush_cache_
+    disable_cache_
+fi
+
+### ACTIVATING DEVELOPER MODE ###
+if [ $activate_developer_mode_and_log == 'yes' ]; then
+    activate_developer_mode
+    enable_log
+fi
+
+
+### Setting privileges ###
+if [ $set_privileges_ownership == 'yes' ]; then
+    set_owner
+    set_privileges
+fi
+
+### Reindexing with n98-magerun
+reindex_all
+### Exiting if something goes wrong
+if [ ! $? -eq 0 ]; then exit 1; fi
+
+echo_stage "- Installed"
+
+exit 0;
