@@ -233,25 +233,25 @@ install_magento
 if [ ! $? -eq 0 ]; then exit 1; fi
 
 ### Initialize composer with n98-magerun
-if [ $init_composer == 'yes' ]; then
+if [ "$init_composer" == 'yes' ]; then
     initialize_composer
 fi
 
 ### Flush and disable cache ###
-if [ $disable_cache == 'yes' ]; then
+if [ "$disable_cache" == 'yes' ]; then
     flush_cache_
     disable_cache_
 fi
 
 ### ACTIVATING DEVELOPER MODE ###
-if [ $activate_developer_mode_and_log == 'yes' ]; then
+if [ "$activate_developer_mode_and_log" == 'yes' ]; then
     activate_developer_mode
     enable_log
 fi
 
 
 ### Setting privileges ###
-if [ $set_privileges_ownership == 'yes' ]; then
+if [ "$set_privileges_ownership" == 'yes' ]; then
     set_owner
     set_privileges
 fi
