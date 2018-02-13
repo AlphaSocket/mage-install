@@ -28,7 +28,7 @@ mysql_run_qry(){
     ### Checking creation DB###
     STATUS=$? 
     if [ $STATUS -eq 0 ]; then 
-        echo "- Query '"$1"' executed without errors"
+        echo "OK: '"$1"' "
     elif (grep -i "^ERROR 1007" /tmp/mage_install_errors > /dev/null); then
         echo_error "Database \"$db_name\" already exists"
         exit 1;
@@ -54,8 +54,8 @@ download_and_extract(){
 create_db(){
     echo_stage "Creating DB for magento"
     ### Create DB ###
-    mysql_run_qry "DROP DATABASE IF EXISTS \`$db_name\`;"
-    mysql_run_qry "CREATE DATABASE \`$db_name\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+    #mysql_run_qry "DROP DATABASE IF EXISTS \`$db_name\`;"
+    mysql_run_qry "CREATE DATABASE IF NOT EXISTS \`$db_name\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
     #$n98magerun db:query --root-dir="$installation_folder" "CREATE SCHEMA `magento.geoip` DEFAULT CHARACTER SET utf8 ;"
 }
 
